@@ -11,6 +11,13 @@ pyzmq = "^25.1.2"
 zmq = "^0.0.0"
 structlog = "^24.2.0"
 
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "pep440"
+version_provider = "poetry"
+update_changelog_on_bump = true
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
