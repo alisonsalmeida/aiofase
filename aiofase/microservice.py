@@ -1,16 +1,25 @@
+from typing import Dict
+
 import zmq.asyncio as aiozmq
 import zmq
 import json
+import structlog
+import logging
 import asyncio
 
 
+logger = structlog.getLogger(__name__)
+
+
 class MicroService:
-    def __init__(self, service, sender_endpoint, receiver_endpoint, serializer=None, debug=False) -> None:
+    def __init__(self, service, sender_endpoint, receiver_endpoint, serializer=None, debug=False):
+        if debug:
+            structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
+
         self.name = service.__class__.__name__
         self.sender_endpoint = sender_endpoint
         self.receiver_endpoint = receiver_endpoint
         self.serializer = serializer or json
-        self.debug = debug
         self.actions = dict()
         self.tasks = dict()
 
@@ -23,6 +32,7 @@ class MicroService:
         self.receiver.connect(sender_endpoint)
 
         self.receiver.setsockopt_string(zmq.SUBSCRIBE, '')
+        self.requests: Dict[str, asyncio.Future] = {}
 
         for name, func in service.__class__.__dict__.items():
             if callable(func):
@@ -32,6 +42,9 @@ class MicroService:
 
                 elif 'task_wrapper' in func.__name__:
                     self.tasks[name] = func
+
+        logger.info(f'Load tasks: {[task for task in self.tasks]}')
+        logger.info(f'Load actions: {[action for action in self.actions]}')
 
     @staticmethod
     def action(function: callable):
@@ -48,16 +61,16 @@ class MicroService:
         return task_wrapper
 
     async def on_connect(self):
-        pass
+        logger.info('connect on broker')
 
     async def on_new_service(self, service: str, actions: list[str]):
-        pass
+        logger.info('new service connect on broker')
 
     async def on_broadcast(self, service: str, data: dict):
-        pass
+        logger.info('new message on broadcast')
 
     async def on_response(self, service: str, data: dict):
-        pass
+        logger.info(f'new response the service: {service}')
 
     async def send_broadcast(self, data):
         self.sender.send_string('<b>:%s' % self.serializer.dumps({'s': self.name, 'd': data}), zmq.NOBLOCK)
@@ -75,48 +88,53 @@ class MicroService:
         if enable_tasks:
             # initialize tasks
             for name, func in self.tasks.items():
+                logger.info(f'Starting task: {name}')
                 asyncio.create_task(func(self), name=name)
 
         while True:
-            package = await self.receiver.recv_string()
+            try:
+                package = await self.receiver.recv_string()
 
-            if '<r>:' in package:
-                payload = self.serializer.loads(package[4:])
-                service = payload['s']
-                actions = payload['a']
-                
-                if self.name == service:
-                    asyncio.create_task(self.on_connect())
+                if '<r>:' in package:
+                    payload = self.serializer.loads(package[4:])
+                    service = payload['s']
+                    actions = payload['a']
+
+                    if self.name == service:
+                        asyncio.create_task(self.on_connect())
+
+                    else:
+                        asyncio.create_task(self.on_new_service(service, actions))
+
+                elif '<b>:' in package:
+                    payload = self.serializer.loads(package[4:])
+                    service = payload['s']
+                    data = payload['d']
+
+                    if self.name != service:
+                        asyncio.create_task(self.on_broadcast(service, data))
+
+                elif f'{self.name}:' in package:
+                    pos = package.find(':')
+                    payload = self.serializer.loads(package[pos + 1:])
+                    service = payload['s']
+                    data = payload['d']
+
+                    asyncio.create_task(self.on_response(service, data))
 
                 else:
-                    asyncio.create_task(self.on_new_service(service, actions))
+                    pos = package.find(':')
+                    payload = self.serializer.loads(package[pos + 1:])
+                    action = package[:pos]
+                    service = payload['s']
+                    data = payload['d']
 
-            elif '<b>:' in package:
-                payload = self.serializer.loads(package[4:])
-                service = payload['s']
-                data = payload['d']
-                
-                if self.name != service:
-                    asyncio.create_task(self.on_broadcast(service, data))
+                    if action in self.actions:
+                        func = self.actions[action]
+                        asyncio.create_task(func(self, service, data))
 
-            elif f'{self.name}:' in package:
-                pos = package.find(':')
-                payload = self.serializer.loads(package[pos + 1:])
-                service = payload['s']
-                data = payload['d']
-
-                asyncio.create_task(self.on_response(service, data))
-
-            else:
-                pos = package.find(':')
-                payload = self.serializer.loads(package[pos + 1:])
-                action = package[:pos]
-                service = payload['s']
-                data = payload['d']
-
-                if action in self.actions:
-                    func = self.actions[action]
-                    asyncio.create_task(func(self, service, data))
+            except Exception as e:
+                logger.error(f'Fail to decode message: {e}')
 
 
 if __name__ == '__main__':

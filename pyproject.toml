@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aiofase"
-version = "0.0.1"
+version = "0.1.0"
 description = "A Fast Asynchronous MicroService Environment compatible with asyncio and pyfase"
 authors = ["alisonsalmeida <wsalisonxp@gmail.com>"]
 readme = "README.md"
@@ -9,6 +9,7 @@ readme = "README.md"
 python = "^3.10"
 pyzmq = "^25.1.2"
 zmq = "^0.0.0"
+structlog = "^24.2.0"
 
 [build-system]
 requires = ["poetry-core"]

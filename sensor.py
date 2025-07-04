@@ -2,6 +2,10 @@ from aiofase.microservice import MicroService
 
 import asyncio
 import random
+import structlog
+
+
+logger = structlog.getLogger(__name__)
 
 
 class EnergySensor(MicroService):
@@ -9,20 +13,21 @@ class EnergySensor(MicroService):
         super().__init__(self, sender_endpoint='ipc:///tmp/sender', receiver_endpoint='ipc:///tmp/receiver')
 
     async def on_connect(self):
-        print('### on_connect ###')
+        logger.info('### on_connect ###')
 
     async def on_new_service(self, service, actions):
-        print('### on_new_service ### service: %s - actions: %s' % (service, actions))
+        logger.info(f'### on_new_service ### service: {service} - actions: {actions}')
 
     async def on_response(self, service, data):
-        print('### on_response ### service: %s respond an status of the action save_data previous resquested: %s' % (service, data))
+        logger.info(
+            f'### on_response ### service: {service} respond an status of the action save_data previous requested: {data}'
+        )
 
     @MicroService.task
     async def meter_process(self):
         while True:
             sensor_data = random.randrange(10, 50, 1)
             await self.request_action('save_data', {'sensor': sensor_data})
-            
             await asyncio.sleep(2)
 
 
