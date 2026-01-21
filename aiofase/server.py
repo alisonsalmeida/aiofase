@@ -1,4 +1,6 @@
 import asyncio
+from argparse import ArgumentParser
+
 import zmq
 import zmq.asyncio as aiozmq
 import structlog
@@ -26,12 +28,23 @@ class Server:
         logger.info(f'Server aiofase listening in: {self.endpoints[1]}')
         while True:
             data = await self.receiver.recv_string()
-            logger.info(f'Server received: {data}')
+            logger.debug(f'Server received: {data}')
             self.sender.send_string(data, zmq.NOBLOCK)
 
 
 if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument(
+        '-sender', '--sender-endpoint', action='store', dest='sender_endpoint', default='tcp://0.0.0.0:3000')
+
+    parser.add_argument(
+        '-receiver', '--receiver-endpoint', action='store', dest='receiver_endpoint', default='tcp://0.0.0.0:4000')
+
+    parser.add_argument('-d', '--debug', action='store_true', dest='debug', default=False)
+
+    args = parser.parse_args()
+
     server = Server(
-        sender_endpoint='ipc:///tmp/sender', receiver_endpoint='ipc:///tmp/receiver', debug=True)
+        sender_endpoint=args.sender_endpoint, receiver_endpoint=args.receiver_endpoint, debug=args.debug)
 
     asyncio.run(server.run())
