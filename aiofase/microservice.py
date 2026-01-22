@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Any
 
 import zmq.asyncio as aiozmq
 import zmq
@@ -6,7 +6,8 @@ import json
 import structlog
 import logging
 import asyncio
-
+import uuid
+import builtins
 
 logger = structlog.getLogger(__name__)
 
@@ -73,17 +74,75 @@ class MicroService:
         logger.info(f'new response the service: {service}')
 
     async def send_broadcast(self, data):
-        self.sender.send_string('<b>:%s' % self.serializer.dumps({'s': self.name, 'd': data}), zmq.NOBLOCK)
+        payload = self.serializer.dumps({'s': self.name, 'd': data})
+        self.sender.send_string(f'<b>:{payload}', zmq.NOBLOCK)
 
-    async def request_action(self, action, data):
-        self.sender.send_string('%s:%s' % (action, self.serializer.dumps({'s': self.name, 'd': data})), zmq.NOBLOCK)
+    def request_action(self, action, data, timeout=None):
+        request_id = uuid.uuid4().hex
+        payload = self.serializer.dumps({'s': self.name, 'd': data, 'areq': {'i': request_id, 'timeout': timeout}})
+        result = asyncio.Future()
+        self.requests[request_id] = {'result': result, 'task_timeout': None}
+
+        self.sender.send_string(f'{action}:{payload}', zmq.NOBLOCK)
+        
+        if timeout is not None:
+            task_timeout = asyncio.create_task(self._result_timeout(result, timeout))
+            self.requests[request_id]['task_timeout'] = task_timeout
+
+        return result
+    
+    async def _result_timeout(self, future: asyncio.Future, timeout: int):
+        await asyncio.sleep(timeout)
+        future.set_exception(asyncio.TimeoutError)
 
     async def response(self, service, data):
-        self.sender.send_string('%s:%s' % (service, self.serializer.dumps({'s': self.name, 'd': data})), zmq.NOBLOCK)
+        payload = self.serializer.dumps({'s': self.name, 'd': data})
+        self.sender.send_string(f'{service}:{payload}', zmq.NOBLOCK)
+
+    async def _response_action(self, service: str, request_id: str, data: Any, error: dict):
+        if request_id in self.requests:
+            future = self.requests[request_id]['result']
+            task_timeout = self.requests[request_id]['task_timeout']
+
+            del request_id
+
+            if bool(error):
+                cls = getattr(builtins, error['type'], Exception)
+                instance = cls(error['error'])
+                if future.done():
+                    return
+
+                if task_timeout is not None: task_timeout.cancel()
+                future.set_exception(instance)
+                return
+            
+            if task_timeout is not None: task_timeout.cancel()
+            future.set_result(data)
+
+
+    async def _request_action(self, request_id: str, timeout, func: callable, service: str, data: dict):
+        error = {}
+        result = None
+
+        try:
+            if timeout is not None:
+                result = await asyncio.wait_for(func(self, service, data), timeout)
+
+            else:
+                result = await func(self, service, data)
+
+        except Exception as e:
+            logger.error(f'error in process action: {e}')
+            error = {'type': e.__class__.__name__, 'error': str(e)}
+
+        finally:
+            payload = self.serializer.dumps({'s': self.name, 'd': result, 'ares': {'i': request_id, 'error': error}})
+            self.sender.send_string(f'<ares>:{payload}', zmq.NOBLOCK)
 
     async def run(self, enable_tasks=True):
-        self.sender.send_string('<r>:%s' % self.serializer.dumps({'s': self.name,
-                                                      'a': [action for action in self.actions]}), zmq.NOBLOCK)
+        actions = [action for action in self.actions]
+        payload = self.serializer.dumps({'s': self.name, 'a': actions})
+        self.sender.send_string(f'<r>:{payload}', zmq.NOBLOCK)
         
         if enable_tasks:
             # initialize tasks
@@ -114,6 +173,18 @@ class MicroService:
                     if self.name != service:
                         asyncio.create_task(self.on_broadcast(service, data))
 
+                # this response from async future
+                elif '<ares>:' in package:
+                    payload = self.serializer.loads(package[7:])
+                    service = payload['s']
+                    data = payload['d']
+                    ares = payload['ares']
+
+                    if service != self.name:
+                        request_id = ares['i']
+                        error = ares['error']
+                        asyncio.create_task(self._response_action(service, request_id, data, error))
+
                 elif f'{self.name}:' in package:
                     pos = package.find(':')
                     payload = self.serializer.loads(package[pos + 1:])
@@ -128,9 +199,19 @@ class MicroService:
                     action = package[:pos]
                     service = payload['s']
                     data = payload['d']
+                    areq = payload.get('areq', None)
 
                     if action in self.actions:
                         func = self.actions[action]
+
+                        # async call
+                        if areq is not None:
+                            request_id = areq['i']
+                            timeout = areq['timeout']
+
+                            asyncio.create_task(self._request_action(request_id, timeout, func, service, data))
+                            continue
+
                         asyncio.create_task(func(self, service, data))
 
             except Exception as e:
