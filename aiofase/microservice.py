@@ -84,40 +84,43 @@ class MicroService:
         self.requests[request_id] = {'result': result, 'task_timeout': None}
 
         self.sender.send_string(f'{action}:{payload}', zmq.NOBLOCK)
-        
+
         if timeout is not None:
-            task_timeout = asyncio.create_task(self._result_timeout(result, timeout))
+            task_timeout = asyncio.create_task(self._result_timeout(request_id, result, timeout))
             self.requests[request_id]['task_timeout'] = task_timeout
 
         return result
-    
-    async def _result_timeout(self, future: asyncio.Future, timeout: int):
+
+    async def _result_timeout(self, request_id: str, future: asyncio.Future, timeout: int):
         await asyncio.sleep(timeout)
-        future.set_exception(asyncio.TimeoutError)
+        self.requests.pop(request_id, None)
+        if not future.done():
+            future.set_exception(asyncio.TimeoutError)
 
     async def response(self, service, data):
         payload = self.serializer.dumps({'s': self.name, 'd': data})
         self.sender.send_string(f'{service}:{payload}', zmq.NOBLOCK)
 
     async def _response_action(self, service: str, request_id: str, data: Any, error: dict):
-        if request_id in self.requests:
-            future = self.requests[request_id]['result']
-            task_timeout = self.requests[request_id]['task_timeout']
+        entry = self.requests.pop(request_id, None)
+        if entry is None:
+            return
 
-            del request_id
+        future = entry['result']
+        task_timeout = entry['task_timeout']
 
-            if bool(error):
-                cls = getattr(builtins, error['type'], Exception)
-                instance = cls(error['error'])
-                if future.done():
-                    return
+        if future.done():
+            return
 
-                if task_timeout is not None: task_timeout.cancel()
-                future.set_exception(instance)
-                return
-            
-            if task_timeout is not None: task_timeout.cancel()
-            future.set_result(data)
+        if task_timeout is not None:
+            task_timeout.cancel()
+
+        if bool(error):
+            cls = getattr(builtins, error['type'], Exception)
+            future.set_exception(cls(error['error']))
+            return
+
+        future.set_result(data)
 
 
     async def _request_action(self, request_id: str, timeout, func: callable, service: str, data: dict):
