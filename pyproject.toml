@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aiofase"
-version = "0.4.0"
+version = "0.4.1"
 description = "A Fast Asynchronous MicroService Environment compatible with asyncio and pyfase"
 authors = ["alisonsalmeida <wsalisonxp@gmail.com>"]
 readme = "README.md"

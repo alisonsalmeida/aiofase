@@ -1,3 +1,9 @@
+## 0.4.1 (2026-05-27)
+
+### Fix
+
+- **microservice**: fix memory leak and race condition in async request tracking
+
 ## 0.4.0 (2026-01-22)
 
 ### Feat
