@@ -14,7 +14,8 @@ logger = structlog.getLogger(__name__)
 
 
 class MicroService:
-    def __init__(self, service, sender_endpoint, receiver_endpoint, serializer=None, debug=False):
+    def __init__(self, service, sender_endpoint, receiver_endpoint, serializer=None, debug=False,
+                 enable_heartbeat=True, heartbeat_interval=5, heartbeat_timeout=None):
         if debug:
             structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
 
@@ -24,6 +25,11 @@ class MicroService:
         self.serializer = serializer or json
         self.actions = dict()
         self.tasks = dict()
+
+        self.enable_heartbeat = enable_heartbeat
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_timeout = heartbeat_timeout or (heartbeat_interval * 3)
+        self.known_services: Dict[str, float] = {}
 
         self.context = aiozmq.Context()
 
@@ -76,11 +82,20 @@ class MicroService:
     async def on_new_service(self, service: str, actions: list[str]):
         logger.info('new service connect on broker')
 
+    async def on_service_disconnect(self, service: str):
+        logger.info(f'service disconnected (no heartbeat): {service}')
+
     async def on_broadcast(self, service: str, data: dict):
         logger.info('new message on broadcast')
 
     async def on_response(self, service: str, data: dict):
         logger.info(f'new response the service: {service}')
+
+    def _touch(self, service: str):
+        if service == self.name:
+            return
+
+        self.known_services[service] = asyncio.get_event_loop().time()
 
     async def send_broadcast(self, data):
         payload = self.serializer.dumps({'s': self.name, 'd': data})
@@ -151,6 +166,22 @@ class MicroService:
             payload = self.serializer.dumps({'s': self.name, 'd': result, 'ares': {'i': request_id, 'error': error}})
             self.sender.send_string(f'<ares>:{payload}', zmq.NOBLOCK)
 
+    async def _send_heartbeat(self):
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            payload = self.serializer.dumps({'s': self.name})
+            self.sender.send_string(f'<hb>:{payload}', zmq.NOBLOCK)
+
+    async def _check_heartbeats(self):
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            now = asyncio.get_event_loop().time()
+
+            for service, last_seen in list(self.known_services.items()):
+                if now - last_seen > self.heartbeat_timeout:
+                    self.known_services.pop(service, None)
+                    asyncio.create_task(self.on_service_disconnect(service))
+
     async def run(self, enable_tasks=True):
         actions = [action for action in self.actions]
         payload = self.serializer.dumps({'s': self.name, 'a': actions})
@@ -162,6 +193,16 @@ class MicroService:
                 logger.info(f'Starting task: {name}')
                 asyncio.create_task(func(self), name=name)
 
+        coroutines = [self._receive_loop()]
+
+        if self.enable_heartbeat:
+            coroutines.append(self._send_heartbeat())
+            coroutines.append(self._check_heartbeats())
+
+        # gathered (not create_task'd) so cancelling run() also stops these
+        await asyncio.gather(*coroutines)
+
+    async def _receive_loop(self):
         while True:
             try:
                 package = await self.receiver.recv_string()
@@ -170,6 +211,8 @@ class MicroService:
                     payload = self.serializer.loads(package[4:])
                     service = payload['s']
                     actions = payload['a']
+
+                    self._touch(service)
 
                     if self.name == service:
                         asyncio.create_task(self.on_connect())
@@ -182,8 +225,16 @@ class MicroService:
                     service = payload['s']
                     data = payload['d']
 
+                    self._touch(service)
+
                     if self.name != service:
                         asyncio.create_task(self.on_broadcast(service, data))
+
+                elif package.startswith('<hb>:'):
+                    payload = self.serializer.loads(package[5:])
+                    service = payload['s']
+
+                    self._touch(service)
 
                 # this response from async future
                 elif package.startswith('<ares>:'):
@@ -191,6 +242,8 @@ class MicroService:
                     service = payload['s']
                     data = payload['d']
                     ares = payload['ares']
+
+                    self._touch(service)
 
                     if service != self.name:
                         request_id = ares['i']
@@ -203,6 +256,8 @@ class MicroService:
                     service = payload['s']
                     data = payload['d']
 
+                    self._touch(service)
+
                     asyncio.create_task(self.on_response(service, data))
 
                 else:
@@ -212,6 +267,8 @@ class MicroService:
                     service = payload['s']
                     data = payload['d']
                     areq = payload.get('areq', None)
+
+                    self._touch(service)
 
                     if action in self.actions:
                         func = self.actions[action]
