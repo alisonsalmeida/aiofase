@@ -6,6 +6,7 @@ import json
 import structlog
 import logging
 import asyncio
+import inspect
 import uuid
 import builtins
 
@@ -35,14 +36,13 @@ class MicroService:
         self.receiver.setsockopt_string(zmq.SUBSCRIBE, '')
         self.requests: Dict[str, asyncio.Future] = {}
 
-        for name, func in service.__class__.__dict__.items():
-            if callable(func):
-                if 'action_wrapper' in func.__name__:
-                    self.actions[name] = func
-                    self.receiver.setsockopt_string(zmq.SUBSCRIBE, f'{name}:')
+        for name, func in inspect.getmembers(service.__class__, predicate=callable):
+            if 'action_wrapper' in getattr(func, '__name__', ''):
+                self.actions[name] = func
+                self.receiver.setsockopt_string(zmq.SUBSCRIBE, f'{name}:')
 
-                elif 'task_wrapper' in func.__name__:
-                    self.tasks[name] = func
+            elif 'task_wrapper' in getattr(func, '__name__', ''):
+                self.tasks[name] = func
 
         logger.info(f'Load tasks: {[task for task in self.tasks]}')
         logger.info(f'Load actions: {[action for action in self.actions]}')
