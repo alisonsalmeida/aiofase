@@ -28,7 +28,7 @@ class MicroService:
 
         self.sender = self.context.socket(zmq.PUSH)
         self.sender.connect(receiver_endpoint)
-        
+
         self.receiver = self.context.socket(zmq.SUB)
         self.receiver.connect(sender_endpoint)
 
@@ -53,7 +53,7 @@ class MicroService:
             return await function(*args, **kwargs)
 
         return action_wrapper
-    
+
     @staticmethod
     def task(function: callable):
         async def task_wrapper(*args, **kwargs):
@@ -146,7 +146,7 @@ class MicroService:
         actions = [action for action in self.actions]
         payload = self.serializer.dumps({'s': self.name, 'a': actions})
         self.sender.send_string(f'<r>:{payload}', zmq.NOBLOCK)
-        
+
         if enable_tasks:
             # initialize tasks
             for name, func in self.tasks.items():
@@ -157,7 +157,7 @@ class MicroService:
             try:
                 package = await self.receiver.recv_string()
 
-                if '<r>:' in package:
+                if package.startswith('<r>:'):
                     payload = self.serializer.loads(package[4:])
                     service = payload['s']
                     actions = payload['a']
@@ -168,7 +168,7 @@ class MicroService:
                     else:
                         asyncio.create_task(self.on_new_service(service, actions))
 
-                elif '<b>:' in package:
+                elif package.startswith('<b>:'):
                     payload = self.serializer.loads(package[4:])
                     service = payload['s']
                     data = payload['d']
@@ -177,7 +177,7 @@ class MicroService:
                         asyncio.create_task(self.on_broadcast(service, data))
 
                 # this response from async future
-                elif '<ares>:' in package:
+                elif package.startswith('<ares>:'):
                     payload = self.serializer.loads(package[7:])
                     service = payload['s']
                     data = payload['d']
@@ -188,7 +188,7 @@ class MicroService:
                         error = ares['error']
                         asyncio.create_task(self._response_action(service, request_id, data, error))
 
-                elif f'{self.name}:' in package:
+                elif package.startswith(f'{self.name}:'):
                     pos = package.find(':')
                     payload = self.serializer.loads(package[pos + 1:])
                     service = payload['s']
