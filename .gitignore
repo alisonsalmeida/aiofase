@@ -6,3 +6,6 @@ dist/
 venv/
 *.key_secret
 /keys/
+.pytest_cache/
+.coverage
+htmlcov/

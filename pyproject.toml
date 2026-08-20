@@ -8,9 +8,15 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 pyzmq = "^25.1.2"
-zmq = "^0.0.0"
 structlog = "^24.2.0"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^5.0.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
