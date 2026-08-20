@@ -10,12 +10,15 @@ import inspect
 import uuid
 import builtins
 
+from . import security
+
 logger = structlog.getLogger(__name__)
 
 
 class MicroService:
     def __init__(self, service, sender_endpoint, receiver_endpoint, serializer=None, debug=False,
-                 enable_heartbeat=True, heartbeat_interval=5, heartbeat_timeout=None):
+                 enable_heartbeat=True, heartbeat_interval=5, heartbeat_timeout=None,
+                 curve_secretkey_file=None, server_publickey_file=None):
         if debug:
             structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
 
@@ -39,6 +42,19 @@ class MicroService:
         # don't block on unsent messages if the socket/context is closed
         self.sender.setsockopt(zmq.LINGER, 0)
         self.receiver.setsockopt(zmq.LINGER, 0)
+
+        if bool(curve_secretkey_file) != bool(server_publickey_file):
+            raise ValueError(
+                'curve_secretkey_file and server_publickey_file must both be provided together')
+
+        if curve_secretkey_file and server_publickey_file:
+            public_key, secret_key = security.load_keypair(curve_secretkey_file)
+            server_public_key, _ = security.load_keypair(server_publickey_file)
+
+            for socket in (self.sender, self.receiver):
+                socket.curve_secretkey = secret_key
+                socket.curve_publickey = public_key
+                socket.curve_serverkey = server_public_key
 
         self.sender.connect(receiver_endpoint)
         self.receiver.connect(sender_endpoint)
