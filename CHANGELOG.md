@@ -1,3 +1,18 @@
+## 0.5.0 (2026-08-20)
+
+### Feat
+
+- **microservice,server**: support optional ZMQ CURVE encryption
+- **security**: add ZMQ CURVE keypair generation/loading helpers
+- **microservice**: add heartbeat and on_service_disconnect hook
+
+### Fix
+
+- **microservice,server**: close sockets/context cleanly
+- **microservice**: discover actions/tasks across the full class MRO
+- **microservice**: route messages by exact prefix, not substring match
+- **nodefase**: remove node.js port (moved to its own repository)
+
 ## 0.4.1 (2026-05-27)
 
 ### Fix
