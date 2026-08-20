@@ -28,9 +28,13 @@ class MicroService:
         self.context = aiozmq.Context()
 
         self.sender = self.context.socket(zmq.PUSH)
-        self.sender.connect(receiver_endpoint)
-
         self.receiver = self.context.socket(zmq.SUB)
+
+        # don't block on unsent messages if the socket/context is closed
+        self.sender.setsockopt(zmq.LINGER, 0)
+        self.receiver.setsockopt(zmq.LINGER, 0)
+
+        self.sender.connect(receiver_endpoint)
         self.receiver.connect(sender_endpoint)
 
         self.receiver.setsockopt_string(zmq.SUBSCRIBE, '')
@@ -46,6 +50,11 @@ class MicroService:
 
         logger.info(f'Load tasks: {[task for task in self.tasks]}')
         logger.info(f'Load actions: {[action for action in self.actions]}')
+
+    def close(self):
+        self.sender.close()
+        self.receiver.close()
+        self.context.term()
 
     @staticmethod
     def action(function: callable):

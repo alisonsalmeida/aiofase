@@ -17,12 +17,22 @@ class Server:
         self.context = aiozmq.Context()
 
         self.receiver = self.context.socket(zmq.PULL)
-        self.receiver.bind(receiver_endpoint)
         self.sender = self.context.socket(zmq.PUB)
+
+        # don't block on unsent messages if the socket/context is closed
+        self.receiver.setsockopt(zmq.LINGER, 0)
+        self.sender.setsockopt(zmq.LINGER, 0)
+
+        self.receiver.bind(receiver_endpoint)
         self.sender.bind(sender_endpoint)
 
         if debug:
             structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
+
+    def close(self):
+        self.receiver.close()
+        self.sender.close()
+        self.context.term()
 
     async def run(self):
         logger.info(f'Server aiofase listening in: {self.endpoints[1]}')
